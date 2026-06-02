@@ -1,0 +1,66 @@
+use ratatui::crossterm::{
+    self,
+    event::{Event as CrosstermEvent, KeyEventKind},
+};
+use std::time::Duration;
+use tokio::{sync::mpsc, time::Instant};
+
+pub enum Event {
+    Tick,
+    Key(crossterm::event::KeyEvent),
+}
+
+pub struct EventHandler {
+    receiver: mpsc::Receiver<Event>,
+}
+
+impl EventHandler {
+    pub fn new(tick_rate: u64) -> Self {
+        let tick_rate = Duration::from_millis(tick_rate);
+        let (sender, receiver) = mpsc::channel(32);
+
+        tokio::spawn(async move {
+            let mut last_tick = Instant::now();
+
+            loop {
+                let timeout = tick_rate
+                    .checked_sub(last_tick.elapsed())
+                    .unwrap_or(Duration::ZERO);
+
+                let has_event = tokio::task::spawn_blocking(move || {
+                    crossterm::event::poll(timeout).expect("Nie można sprawdzić zdarzeń.")
+                })
+                .await
+                .expect("spawn_blocking nie powiódł się.");
+
+                if has_event {
+                    let event = tokio::task::spawn_blocking(|| {
+                        crossterm::event::read().expect("Nie można odczytać zdarzenia.")
+                    })
+                    .await
+                    .expect("spawn_blocking nie powiódł się.");
+
+                    if let CrosstermEvent::Key(key) = event
+                        && key.kind == KeyEventKind::Press
+                        && sender.send(Event::Key(key)).await.is_err()
+                    {
+                        break;
+                    }
+                }
+
+                if last_tick.elapsed() >= tick_rate {
+                    if sender.send(Event::Tick).await.is_err() {
+                        break;
+                    }
+                    last_tick = Instant::now();
+                }
+            }
+        });
+
+        Self { receiver }
+    }
+
+    pub async fn next(&mut self) -> Option<Event> {
+        self.receiver.recv().await
+    }
+}
