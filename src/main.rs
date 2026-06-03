@@ -3,7 +3,7 @@ use std::io::stderr;
 use crate::app::App;
 use crate::events::{Event, EventHandler};
 use crate::ui::contents::main_content::MainContent;
-use crate::ui::contents::scan_ports::{self, ConnType, Port};
+use crate::ui::contents::scan_ports;
 use anyhow::Result;
 use ratatui::crossterm::ExecutableCommand;
 use ratatui::crossterm::terminal;
@@ -21,17 +21,13 @@ async fn main() -> Result<()> {
     let mut terminal = ratatui::Terminal::new(backend)?;
     let mut events_handler = EventHandler::new(250);
 
-    let ports = vec![
-        Port::new(16, ConnType::Tcp),
-        Port::new(13, ConnType::Tcp),
-        Port::new(12, ConnType::Tcp),
-    ];
-    let ports_content = scan_ports::PortsContent::new(ports);
+    let ports_content = scan_ports::PortsContent::new();
     let main_content = MainContent {
         content: String::new(),
     };
     let mut app = App::new(vec![Box::new(main_content), Box::new(ports_content)]);
 
+    app.popup = Some("text".to_string());
     loop {
         terminal
             .draw(|frame| ui::render::render_ui(frame, &app))
@@ -41,8 +37,14 @@ async fn main() -> Result<()> {
             Event::Tick => {}
             Event::Key(k) => {
                 use ratatui::crossterm::event::KeyCode;
-
-                app.current_page_mut().controls(k.code);
+                if app.popup.is_some() {
+                    if k.code != KeyCode::Esc {
+                        continue;
+                    }
+                    app.popup = None;
+                }
+                app.current_page_mut()
+                    .controls(k.code, &events_handler.sender);
                 match k.code {
                     KeyCode::Char('1') => app.navigate(0),
                     KeyCode::Char('2') => app.navigate(1),
@@ -53,6 +55,9 @@ async fn main() -> Result<()> {
                     KeyCode::Char(c) => app.content.push(c),
                     _ => {}
                 }
+            }
+            Event::Popup(txt) => {
+                app.popup = Some(txt);
             }
         }
 

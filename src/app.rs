@@ -5,6 +5,7 @@ pub struct App {
     pub content: String,
     pub pages: Vec<Box<dyn Content>>,
     pub current_page: usize,
+    pub popup: Option<String>,
 }
 
 impl App {
@@ -14,6 +15,7 @@ impl App {
             content: String::new(),
             pages,
             current_page: 0,
+            popup: None,
         }
     }
 

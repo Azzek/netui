@@ -8,16 +8,20 @@ use tokio::{sync::mpsc, time::Instant};
 pub enum Event {
     Tick,
     Key(crossterm::event::KeyEvent),
+    Popup(String),
 }
 
 pub struct EventHandler {
     receiver: mpsc::Receiver<Event>,
+    pub sender: mpsc::Sender<Event>,
 }
 
 impl EventHandler {
     pub fn new(tick_rate: u64) -> Self {
         let tick_rate = Duration::from_millis(tick_rate);
         let (sender, receiver) = mpsc::channel(32);
+
+        let loop_sender = sender.clone();
 
         tokio::spawn(async move {
             let mut last_tick = Instant::now();
@@ -40,16 +44,17 @@ impl EventHandler {
                     .await
                     .expect("spawn_blocking nie powiódł się.");
 
-                    if let CrosstermEvent::Key(key) = event
-                        && key.kind == KeyEventKind::Press
-                        && sender.send(Event::Key(key)).await.is_err()
-                    {
-                        break;
-                    }
+                    // if let CrosstermEvent::Key(key) = event {
+                    //     if key.kind == KeyEventKind::Press {
+                    //         if loop_sender.send(Event::Key(key)).await.is_err() {
+                    //             break;
+                    //         }
+                    //     }
+                    // }
                 }
 
                 if last_tick.elapsed() >= tick_rate {
-                    if sender.send(Event::Tick).await.is_err() {
+                    if loop_sender.send(Event::Tick).await.is_err() {
                         break;
                     }
                     last_tick = Instant::now();
@@ -57,7 +62,7 @@ impl EventHandler {
             }
         });
 
-        Self { receiver }
+        Self { receiver, sender }
     }
 
     pub async fn next(&mut self) -> Option<Event> {

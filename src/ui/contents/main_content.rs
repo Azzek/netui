@@ -2,8 +2,9 @@ use ratatui::{
     style::Style,
     widgets::{Block, Paragraph},
 };
+use tokio::sync::mpsc::Sender;
 
-use crate::{app::App, ui::contents::content::Content};
+use crate::{app::App, events::Event, ui::contents::content::Content};
 
 pub struct MainContent {
     pub content: String,
@@ -17,7 +18,7 @@ impl Content for MainContent {
         f.render_widget(paragraph, area);
     }
 
-    fn controls(&mut self, key: ratatui::crossterm::event::KeyCode) {
+    fn controls(&mut self, key: ratatui::crossterm::event::KeyCode, tx: &Sender<Event>) {
         if let Some(c) = key.as_char() {
             self.content.push(c);
         }

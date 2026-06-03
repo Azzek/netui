@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Paragraph},
 };
 
-use crate::app::App;
+use crate::{app::App, ui::components::popup::Popup};
 
 pub fn render_ui(frame: &mut Frame, app: &App) {
     let layout = Layout::default()
@@ -30,8 +30,12 @@ pub fn render_ui(frame: &mut Frame, app: &App) {
                 .border_type(ratatui::widgets::BorderType::Rounded)
                 .border_style(Style::new().blue()),
         );
-
     frame.render_widget(header, layout[0]);
     app.current_page().render(frame, layout[1], &app);
     frame.render_widget(footer, layout[2]);
+
+    if let Some(ref txt) = app.popup {
+        let popup = Popup::new(txt.to_string());
+        frame.render_widget(popup, frame.area());
+    }
 }
