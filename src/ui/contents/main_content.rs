@@ -18,9 +18,14 @@ impl Content for MainContent {
         f.render_widget(paragraph, area);
     }
 
-    fn controls(&mut self, key: ratatui::crossterm::event::KeyCode, tx: &Sender<Event>) {
-        if let Some(c) = key.as_char() {
-            self.content.push(c);
+    fn update(&mut self, event: Event, tx: Sender<Event>) {
+        match event {
+            Event::Key(k) => {
+                if let Some(c) = k.code.as_char() {
+                    self.content.push(c);
+                }
+            }
+            _ => {}
         }
     }
 }

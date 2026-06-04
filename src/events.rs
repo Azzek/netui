@@ -5,10 +5,15 @@ use ratatui::crossterm::{
 use std::time::Duration;
 use tokio::{sync::mpsc, time::Instant};
 
+use crate::ui::contents::scan_ports::Port;
+
+#[derive(Debug)]
 pub enum Event {
     Tick,
     Key(crossterm::event::KeyEvent),
     Popup(String),
+    PortFound(Port),
+    ScanFinished,
 }
 
 pub struct EventHandler {
@@ -44,13 +49,13 @@ impl EventHandler {
                     .await
                     .expect("spawn_blocking nie powiódł się.");
 
-                    // if let CrosstermEvent::Key(key) = event {
-                    //     if key.kind == KeyEventKind::Press {
-                    //         if loop_sender.send(Event::Key(key)).await.is_err() {
-                    //             break;
-                    //         }
-                    //     }
-                    // }
+                    if let CrosstermEvent::Key(key) = event {
+                        if key.kind == KeyEventKind::Press {
+                            if loop_sender.send(Event::Key(key)).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
                 }
 
                 if last_tick.elapsed() >= tick_rate {

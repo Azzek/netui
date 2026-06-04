@@ -6,10 +6,12 @@ use crate::ui::contents::main_content::MainContent;
 use crate::ui::contents::scan_ports;
 use anyhow::Result;
 use ratatui::crossterm::ExecutableCommand;
+use ratatui::crossterm::event::KeyCode;
 use ratatui::crossterm::terminal;
 
 mod app;
 mod events;
+mod features;
 mod ui;
 
 #[tokio::main]
@@ -27,24 +29,24 @@ async fn main() -> Result<()> {
     };
     let mut app = App::new(vec![Box::new(main_content), Box::new(ports_content)]);
 
-    app.popup = Some("text".to_string());
+    app.popup = Some("welcome in app!".to_string());
     loop {
         terminal
             .draw(|frame| ui::render::render_ui(frame, &app))
             .expect("cant render ui");
 
-        match events_handler.next().await.expect("Unable to read events") {
+        let event = events_handler.next().await.expect("Unable to read events");
+
+        // main event controlling
+        match &event {
             Event::Tick => {}
             Event::Key(k) => {
-                use ratatui::crossterm::event::KeyCode;
                 if app.popup.is_some() {
                     if k.code != KeyCode::Esc {
                         continue;
                     }
                     app.popup = None;
                 }
-                app.current_page_mut()
-                    .controls(k.code, &events_handler.sender);
                 match k.code {
                     KeyCode::Char('1') => app.navigate(0),
                     KeyCode::Char('2') => app.navigate(1),
@@ -57,9 +59,14 @@ async fn main() -> Result<()> {
                 }
             }
             Event::Popup(txt) => {
-                app.popup = Some(txt);
+                app.popup = Some(txt.clone());
             }
+            _ => {}
         }
+
+        // Current page event controlling
+        app.current_page_mut()
+            .update(event, events_handler.sender.clone());
 
         if app.exit {
             break;

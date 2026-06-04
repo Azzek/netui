@@ -1,37 +1,33 @@
-use std::{net::IpAddr, str::FromStr, sync::Arc, time::Duration};
+use std::{net::IpAddr, str::FromStr};
 
 use ratatui::{
     Frame,
     crossterm::event::KeyCode,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Style, Stylize},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, List, ListItem, Widget},
 };
-use tokio::{
-    net::TcpStream,
-    sync::{Mutex, mpsc::Sender},
-    task::JoinSet,
-    time::timeout,
-};
+use tokio::sync::mpsc::Sender;
 
 use crate::{
     app::App,
     events::Event,
+    features::ports_scanner::launch_background_scan,
     ui::{components::button::Button, contents::content::Content},
 };
-
+#[derive(Debug)]
 pub struct Port {
-    pub port: u32,
+    pub port: u16,
     pub conn_type: ConnType,
 }
 
 impl Port {
-    pub fn new(port: u32, conn_type: ConnType) -> Self {
+    pub fn new(port: u16, conn_type: ConnType) -> Self {
         Self { port, conn_type }
     }
 }
-
+#[derive(Debug)]
 pub enum ConnType {
     Udp,
     Tcp,
@@ -52,7 +48,7 @@ pub struct ScanState {
 }
 
 pub struct PortsContent {
-    pub state: Arc<Mutex<ScanState>>,
+    pub state: ScanState,
     buttons: Vec<Button>,
 }
 
@@ -62,80 +58,30 @@ impl PortsContent {
             Button::new("Scan".to_string(), true),
             Button::new("Stop".to_string(), false),
         ];
-        let state = Arc::new(Mutex::new(ScanState {
+        let state = ScanState {
             ports: Vec::new(),
             is_scanning: false,
-        }));
+        };
         Self { buttons, state }
     }
 
-    pub fn scan_ports(&mut self) {
-        if let Ok(mut s) = self.state.try_lock() {
-            if s.is_scanning {
-                return;
-            }
-            s.is_scanning = true;
-            s.ports.clear();
-        }
-
-        let state = self.state.clone();
-        let ip_str = String::from("8.8.8.8");
-
-        tokio::spawn(async move {
-            let mut ports_range = 1u16..=65535;
-            let mut set: JoinSet<Result<u16, String>> = JoinSet::new();
-
-            for _ in 0..200 {
-                if let Some(port) = ports_range.next() {
-                    let ip = IpAddr::from_str(&ip_str).expect("zjebany ip XXXXXXX");
-                    set.spawn(async move { scan_tcp(ip, port).await });
-                }
-            }
-
-            while let Some(result) = set.join_next().await {
-                if let Some(next_port) = ports_range.next() {
-                    let ip = IpAddr::from_str(&ip_str).expect("zjebany ip XXXXXXX");
-                    set.spawn(async move { scan_tcp(ip, next_port).await });
-                }
-
-                match result {
-                    Ok(Ok(port)) => {
-                        state
-                            .lock()
-                            .await
-                            .ports
-                            .push(Port::new(port as u32, ConnType::Tcp));
-                    }
-                    Ok(Err(_)) => {
-                        // state
-                        //     .lock()
-                        //     .await
-                        //     .ports
-                        //     .push(Port::new(100 as u32, ConnType::Tcp));
-                    } //
-                    Err(e) => eprintln!("Błąd tasku: {:?}", e),
-                }
-            }
-
-            state.lock().await.is_scanning = false;
-        });
+    pub fn start_scan(&mut self, tx: Sender<Event>) {
+        let ip = IpAddr::from_str("8.8.8.8").expect("xd");
+        launch_background_scan(ip, tx);
     }
-
     pub fn stop_scan(&mut self) {
-        if let Ok(mut s) = self.state.try_lock() {
-            s.is_scanning = false;
-        }
+        self.state.is_scanning = false;
     }
 }
 
-pub async fn scan_tcp(ip: IpAddr, port: u16) -> Result<u16, String> {
-    let addr = std::net::SocketAddr::new(ip, port);
-    match timeout(Duration::from_millis(2000), TcpStream::connect(&addr)).await {
-        Ok(Ok(_)) => Ok(port),
-        Ok(Err(e)) => Err(format!("Port closed: {}", e)),
-        Err(_) => Err("Filtered or timed out".to_string()),
-    }
-}
+// pub async fn scan_tcp(ip: IpAddr, port: u16) -> Result<u16, String> {
+//     let addr = std::net::SocketAddr::new(ip, port);
+//     match timeout(Duration::from_millis(2000), TcpStream::connect(&addr)).await {
+//         Ok(Ok(_)) => Ok(port),
+//         Ok(Err(e)) => Err(format!("Port closed: {}", e)),
+//         Err(_) => Err("Filtered or timed out".to_string()),
+//     }
+// }
 
 pub async fn scan_udp(ip: IpAddr, port: u16) -> Result<u16, String> {
     Ok(16) // let
@@ -146,16 +92,7 @@ impl Content for PortsContent {
         let buf = frame.buffer_mut();
         let layout = Layout::vertical([Constraint::Min(0), Constraint::Length(3)]).split(area);
 
-        let Ok(state) = self.state.try_lock() else {
-            Block::bordered()
-                .title(" Ports ")
-                .border_type(BorderType::Rounded)
-                .border_style(Style::new().blue())
-                .render(layout[0], buf);
-            return;
-        };
-
-        let title = if state.is_scanning {
+        let title = if self.state.is_scanning {
             " Ports [skanowanie...] "
         } else {
             " Ports "
@@ -166,8 +103,9 @@ impl Content for PortsContent {
             .border_type(BorderType::Rounded)
             .border_style(Style::new().blue());
 
-        if !state.ports.is_empty() {
-            let items: Vec<ListItem> = state
+        if !self.state.ports.is_empty() {
+            let items: Vec<ListItem> = self
+                .state
                 .ports
                 .iter()
                 .map(|port| {
@@ -205,32 +143,38 @@ impl Content for PortsContent {
         }
     }
 
-    fn controls(&mut self, key: KeyCode, _tx: &Sender<Event>) {
+    fn update(&mut self, event: Event, tx: Sender<Event>) {
         if self.buttons.is_empty() {
             return;
         }
 
         if let Some(hover_index) = self.buttons.iter().position(|b| b.is_focused) {
-            match key {
-                KeyCode::Right => {
-                    let next = (hover_index + 1) % self.buttons.len();
-                    self.buttons[hover_index].is_focused = false;
-                    self.buttons[next].is_focused = true;
-                }
-                KeyCode::Left => {
-                    let prev = if hover_index == 0 {
-                        self.buttons.len() - 1
-                    } else {
-                        hover_index - 1
-                    };
-                    self.buttons[hover_index].is_focused = false;
-                    self.buttons[prev].is_focused = true;
-                }
-                KeyCode::Enter => match hover_index {
-                    0 => self.scan_ports(),
-                    1 => self.stop_scan(),
+            match event {
+                Event::Key(k) => match k.code {
+                    KeyCode::Right => {
+                        let next = (hover_index + 1) % self.buttons.len();
+                        self.buttons[hover_index].is_focused = false;
+                        self.buttons[next].is_focused = true;
+                    }
+                    KeyCode::Left => {
+                        let prev = if hover_index == 0 {
+                            self.buttons.len() - 1
+                        } else {
+                            hover_index - 1
+                        };
+                        self.buttons[hover_index].is_focused = false;
+                        self.buttons[prev].is_focused = true;
+                    }
+                    KeyCode::Enter => match hover_index {
+                        0 => self.start_scan(tx),
+                        1 => self.stop_scan(),
+                        _ => {}
+                    },
                     _ => {}
                 },
+                Event::PortFound(p) => {
+                    self.state.ports.push(p);
+                }
                 _ => {}
             }
         }
