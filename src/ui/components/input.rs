@@ -2,29 +2,25 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
     style::Style,
-    widgets::{Block, Clear, Widget},
+    text::Text,
+    widgets::{Block, Paragraph, Widget},
 };
 
-pub struct Popup<T>
-where
-    T: Widget,
-{
-    content: T,
+use crate::traits::InputBlock;
+
+pub struct Input {
+    input_buff: String,
 }
 
-impl<T> Popup<T>
-where
-    T: Widget,
-{
-    pub fn new(content: T) -> Self {
-        Self { content }
+impl InputBlock for Input {
+    fn control(&mut self, key: ratatui::crossterm::event::KeyCode) {
+        if let Some(char) = key.as_char() {
+            self.input_buff.push(char);
+        }
     }
 }
 
-impl<T> Widget for Popup<T>
-where
-    T: Widget,
-{
+impl Widget for Input {
     fn render(self, rect: Rect, buff: &mut Buffer) {
         let popup_layout = Layout::default()
             .direction(Direction::Vertical)
@@ -44,16 +40,11 @@ where
             ])
             .split(popup_layout[1])[1];
 
-        Clear.render(popup_rect, buff);
-
-        let block = Block::bordered()
-            .title(" Info ")
-            .border_style(Style::new().green());
-
-        let inner_rect = block.inner(popup_rect);
-
-        block.render(popup_rect, buff);
-
-        self.content.render(inner_rect, buff);
+        let popup = Paragraph::new(Text::raw(self.input_buff)).centered().block(
+            Block::bordered()
+                .title("Info")
+                .border_style(Style::new().green()),
+        );
+        popup.render(popup_rect, buff);
     }
 }

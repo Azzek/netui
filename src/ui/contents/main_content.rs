@@ -28,4 +28,8 @@ impl Content for MainContent {
             _ => {}
         }
     }
+
+    fn instructions(&self) -> Vec<String> {
+        Vec::from(["noting".to_string()])
+    }
 }

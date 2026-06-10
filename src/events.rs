@@ -13,7 +13,13 @@ pub enum Event {
     Key(crossterm::event::KeyEvent),
     Popup(String),
     PortFound(Port),
+    CurrentPort(u16),
     ScanFinished,
+    ScanProgress {
+        progress: u32,
+        current_probe: String,
+        pkts_s: u64,
+    },
 }
 
 pub struct EventHandler {

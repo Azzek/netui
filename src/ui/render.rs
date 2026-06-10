@@ -2,7 +2,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout},
     style::Style,
-    text::Text,
+    text::{Line, Text},
     widgets::{Block, Paragraph},
 };
 
@@ -23,13 +23,13 @@ pub fn render_ui(frame: &mut Frame, app: &App) {
             .border_type(ratatui::widgets::BorderType::Rounded)
             .border_style(Style::new().blue()),
     );
-    let footer = Paragraph::new(Text::raw("[H-help] [Q-Quit] [<- left] [right ->]"))
-        .centered()
-        .block(
-            Block::bordered()
-                .border_type(ratatui::widgets::BorderType::Rounded)
-                .border_style(Style::new().blue()),
-        );
+
+    let instructions_string = app.current_page().instructions().join("  │  ");
+    let footer = Paragraph::new(instructions_string).centered().block(
+        Block::bordered()
+            .border_type(ratatui::widgets::BorderType::Rounded)
+            .border_style(Style::new().fg(ratatui::style::Color::Cyan)),
+    );
     frame.render_widget(header, layout[0]);
     app.current_page().render(frame, layout[1], &app);
     frame.render_widget(footer, layout[2]);

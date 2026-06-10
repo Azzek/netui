@@ -1,4 +1,7 @@
-use crate::ui::contents::content::Content;
+use ratatui::crossterm::event::KeyCode;
+use tokio::sync::mpsc::Sender; // Potrzebne do przekazania kanału
+
+use crate::{events::Event, ui::contents::content::Content};
 
 pub struct App {
     pub exit: bool,
@@ -16,6 +19,42 @@ impl App {
             pages,
             current_page: 0,
             popup: None,
+        }
+    }
+
+    pub fn handle_events(&mut self, event: Event, tx: Sender<Event>) {
+        let mut forward_key_to_page = true;
+        if !self.current_page().captures_input() {
+            match &event {
+                Event::Key(k) => {
+                    if self.popup.is_some() {
+                        forward_key_to_page = false;
+                        if k.code == KeyCode::Esc {
+                            self.popup = None;
+                        }
+                    } else {
+                        match k.code {
+                            KeyCode::Char('1') => self.navigate(0),
+                            KeyCode::Char('2') => self.navigate(1),
+                            KeyCode::Char('q') => self.exit = true,
+                            KeyCode::Backspace => {
+                                self.content.pop();
+                            }
+                            KeyCode::Char(c) => self.content.push(c),
+                            _ => {}
+                        }
+                    }
+                }
+                Event::Popup(txt) => {
+                    self.popup = Some(txt.clone());
+                }
+                Event::Tick => {}
+                _ => {}
+            }
+        }
+
+        if forward_key_to_page || !matches!(event, Event::Key(_)) {
+            self.current_page_mut().update(event, tx);
         }
     }
 
