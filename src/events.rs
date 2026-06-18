@@ -5,7 +5,7 @@ use ratatui::crossterm::{
 use std::time::Duration;
 use tokio::{sync::mpsc, time::Instant};
 
-use crate::ui::contents::scan_ports::Port;
+use crate::mods::scan_ports::Port;
 
 #[derive(Debug)]
 pub enum Event {
@@ -20,6 +20,7 @@ pub enum Event {
         current_probe: String,
         pkts_s: u64,
     },
+    PacketFound(Vec<u8>),
 }
 
 pub struct EventHandler {

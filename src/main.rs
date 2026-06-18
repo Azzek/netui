@@ -3,14 +3,12 @@ use std::io::stderr;
 use anyhow::Result;
 use ratatui::crossterm::{ExecutableCommand, terminal};
 
-use crate::{
-    events::EventHandler,
-    ui::contents::{main_content::MainContent, scan_ports},
-};
+use crate::events::EventHandler;
 
 mod app;
 mod events;
 mod features;
+mod mods;
 mod traits;
 mod ui;
 
@@ -30,11 +28,16 @@ async fn main() -> Result<()> {
     let mut terminal = ratatui::Terminal::new(backend)?;
     let mut events_handler = EventHandler::new(250);
 
-    let ports_content = scan_ports::PortsContent::new();
-    let main_content = MainContent {
+    let ports_mod = mods::scan_ports::PortsContent::new();
+    let main_mod = mods::main_content::MainContent {
         content: String::new(),
     };
-    let mut app = app::App::new(vec![Box::new(main_content), Box::new(ports_content)]);
+    let sniff_mod = mods::packet_sniffer::SnifferMod::new();
+    let mut app = app::App::new(vec![
+        Box::new(main_mod),
+        Box::new(ports_mod),
+        Box::new(sniff_mod),
+    ]);
     app.popup = Some("Welcome to the app!".to_string());
 
     loop {

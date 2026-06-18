@@ -1,4 +1,5 @@
 use std::net::IpAddr;
+use std::ops::RangeToInclusive;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -7,7 +8,7 @@ use tokio::task::JoinSet;
 use tokio::time::timeout;
 
 use crate::events::Event;
-use crate::ui::contents::scan_ports::{ConnType, Port};
+use crate::mods::scan_ports::{ConnType, Port};
 
 fn lookup_service(port: u16) -> &'static str {
     match port {
@@ -23,18 +24,23 @@ fn lookup_service(port: u16) -> &'static str {
     }
 }
 
-pub fn launch_background_scan(target_ip: IpAddr, tx: Sender<Event>) {
+pub fn launch_background_scan(
+    target_ip: IpAddr,
+    tx: Sender<Event>,
+    range: RangeToInclusive<u16>,
+    max_workers: u16,
+) {
     tokio::spawn(async move {
-        let total_ports = 65535;
-        let mut ports_range = 1u16..=total_ports;
         let mut set = JoinSet::new();
 
+        let mut ports_range = 1..range.end;
+        let total_ports = ports_range.end;
         let mut processed_ports = 0;
         let mut pkts_this_second = 0;
         let mut current_pkts_s = 0;
         let mut last_tick = Instant::now();
 
-        for _ in 0..200 {
+        for _ in 0..max_workers {
             if let Some(port) = ports_range.next() {
                 set.spawn(async move { scan_tcp(target_ip, port).await });
             }

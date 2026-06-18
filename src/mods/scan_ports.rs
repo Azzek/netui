@@ -98,19 +98,19 @@ impl ActiveSetting {
         ActiveSetting::ScanSpeed,
     ];
 
-    pub fn name(&self) -> &'static str {
-        match self {
-            ActiveSetting::TargetIP => "Target IP Address",
-            ActiveSetting::PortRange => "Range of Ports",
-            ActiveSetting::ScanSpeed => "Scanning Speed (workers)",
-        }
-    }
+    // pub fn name(&self) -> &'static str {
+    //     match self {
+    //         ActiveSetting::TargetIP => "Target IP Address",
+    //         ActiveSetting::PortRange => "Range of Ports",
+    //         ActiveSetting::ScanSpeed => "Scanning Speed (workers)",
+    //     }
+    // }
 }
 
 pub struct ScanState {
     pub scan_state: ScanLabelStatus,
 
-    pub settings_popup_state: Option<Option<ActiveSetting>>,
+    settings_popup_state: Option<Option<ActiveSetting>>,
     pub settings_list_state: RefCell<ListState>,
     pub validation_error: String,
 

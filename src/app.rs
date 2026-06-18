@@ -1,18 +1,18 @@
 use ratatui::crossterm::event::KeyCode;
-use tokio::sync::mpsc::Sender; // Potrzebne do przekazania kanału
+use tokio::sync::mpsc::Sender;
 
-use crate::{events::Event, ui::contents::content::Content};
+use crate::{events::Event, traits::AppMod};
 
 pub struct App {
     pub exit: bool,
     pub content: String,
-    pub pages: Vec<Box<dyn Content>>,
+    pub pages: Vec<Box<dyn AppMod>>,
     pub current_page: usize,
     pub popup: Option<String>,
 }
 
 impl App {
-    pub fn new(pages: Vec<Box<dyn Content>>) -> Self {
+    pub fn new(pages: Vec<Box<dyn AppMod>>) -> Self {
         Self {
             exit: false,
             content: String::new(),
@@ -36,6 +36,7 @@ impl App {
                         match k.code {
                             KeyCode::Char('1') => self.navigate(0),
                             KeyCode::Char('2') => self.navigate(1),
+                            KeyCode::Char('3') => self.navigate(2),
                             KeyCode::Char('q') => self.exit = true,
                             KeyCode::Backspace => {
                                 self.content.pop();
@@ -58,11 +59,11 @@ impl App {
         }
     }
 
-    pub fn current_page(&self) -> &dyn Content {
+    pub fn current_page(&self) -> &dyn AppMod {
         self.pages[self.current_page].as_ref()
     }
 
-    pub fn current_page_mut(&mut self) -> &mut dyn Content {
+    pub fn current_page_mut(&mut self) -> &mut dyn AppMod {
         self.pages[self.current_page].as_mut()
     }
 
