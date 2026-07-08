@@ -375,9 +375,9 @@ pub fn packet_parser(raw: &[u8]) -> Result<Packet, ParseError> {
         }
 
         0x86DD => {
-            // let (ipv6, rest) = parse_ipv6(rest)?;
-            // packet.network = Some(NetworkLayer::IPv6(ipv6));
-            // packet.payload = rest.to_vec();
+            let (ipv6, rest) = parse_ipv6(rest)?;
+            packet.network = Some(NetworkLayer::IPv6(ipv6));
+            packet.payload = rest.to_vec();
         }
 
         0x0806 => {
@@ -399,9 +399,13 @@ pub fn parse_ethernet(raw: &[u8]) -> Result<(EthernetHeader, &[u8]), ParseError>
         return Err(ParseError::MalformedPacket);
     }
 
-    let dst_mac = raw[0..6].try_into().unwrap();
+    let mut dst_mac = [0u8; 6];
 
-    let src_mac = raw[6..12].try_into().unwrap();
+    let mut src_mac = [0u8; 6];
+
+    dst_mac.copy_from_slice(&raw[0..6]);
+
+    src_mac.copy_from_slice(&raw[6..12]);
 
     let ether_type = u16::from_be_bytes([raw[12], raw[13]]);
 
@@ -420,8 +424,7 @@ pub fn parse_ipv4(raw: &[u8]) -> Result<(IPv4Header, &[u8]), ParseError> {
         return Err(ParseError::MalformedPacket);
     }
 
-    let version = raw[0] >> 4;
-    let ihl = raw[0] & 0x0F;
+    let [version, ihl] = byte_to_2x4bits(raw[0]);
 
     if version != 4 {
         return Err(ParseError::MalformedPacket);
@@ -502,17 +505,11 @@ pub fn parse_ipv6(raw: &[u8]) -> Result<(IPv6Header, &[u8]), ParseError> {
 
     let hop_limit = raw[7];
 
-    let src = std::net::Ipv6Addr::from(
-        raw[8..24]
-            .try_into()
-            .map_err(|_| ParseError::MalformedPacket)?,
-    );
+    let mut src = [0u8; 16];
+    let mut dst = [0u8; 16];
 
-    let dst = std::net::Ipv6Addr::from(
-        raw[24..40]
-            .try_into()
-            .map_err(|_| ParseError::MalformedPacket)?,
-    );
+    src.copy_from_slice(&raw[8..24]);
+    dst.copy_from_slice(&raw[24..40]);
 
     let header = IPv6Header {
         version,
