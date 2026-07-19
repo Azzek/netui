@@ -14,6 +14,7 @@ use tokio::sync::mpsc::Sender;
 pub enum ParseError {
     InvalidSomething,
     MalformedPacket,
+    UnsupportedProtocol,
 }
 
 #[derive(Debug)]
@@ -126,11 +127,11 @@ pub struct ArpHeader {
 
     pub operation: u16,
 
-    pub sender_mac: [u8; 6],
-    pub sender_ip: [u8; 4],
+    pub sender_hardware_addr: Vec<u8>,
+    pub sender_protocol_addr: Vec<u8>,
 
-    pub target_mac: [u8; 6],
-    pub target_ip: [u8; 4],
+    pub target_hardware_addr: Vec<u8>,
+    pub target_protocol_addr: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -156,6 +157,8 @@ pub struct TcpHeader {
 
     pub checksum: u16,
     pub urgent_pointer: u16,
+
+    pub options: Vec<TcpOption>,
 }
 
 #[derive(Debug, Default)]
@@ -168,6 +171,23 @@ pub struct TcpFlags {
     pub urg: bool,
     pub ece: bool,
     pub cwr: bool,
+}
+
+#[derive(Debug)]
+pub enum TcpOption {
+    End,
+
+    NoOperation,
+
+    MaximumSegmentSize { value: u16 },
+
+    WindowScale { shift: u8 },
+
+    SackPermitted,
+
+    Timestamp { ts_value: u32, ts_echo: u32 },
+
+    Unknown { kind: u8, data: Vec<u8> },
 }
 
 #[derive(Debug)]
@@ -295,6 +315,11 @@ impl AppMod for SnifferMod {
                     ]),
                     // NETWORK
                     Line::from(vec![Span::raw("    net: "), Span::raw(network_info)]),
+                    // TRANSPORT
+                    Line::from(Span::styled(
+                        format!("{:?}", p.transport),
+                        ratatui::style::Style::default().fg(ratatui::style::Color::Blue),
+                    )),
                     // SEPARATOR
                     Line::from(Span::styled(
                         separator,
@@ -308,9 +333,11 @@ impl AppMod for SnifferMod {
 
         f.render_widget(paragraph, area);
     }
+
     fn captures_input(&self) -> bool {
         false
     }
+
     fn instructions(&self) -> Vec<String> {
         vec!["Todo".to_string()]
     }
@@ -348,7 +375,7 @@ fn background_sniffing(tx: Sender<Event>) {
 }
 
 pub fn packet_parser(raw: &[u8]) -> Result<Packet, ParseError> {
-    let (ethernet, rest) = parse_ethernet(raw)?;
+    let (ethernet, mut rest) = parse_ethernet(raw)?;
 
     let mut packet = Packet {
         ethernet,
@@ -358,32 +385,101 @@ pub fn packet_parser(raw: &[u8]) -> Result<Packet, ParseError> {
     };
 
     match packet.ethernet.ether_type {
+        // IPv4
         0x0800 => {
-            let (ipv4, rest) = parse_ipv4(rest)?;
+            let (ipv4, payload) = parse_ipv4(rest)?;
+
+            let protocol = ipv4.protocol;
+
             packet.network = Some(NetworkLayer::IPv4(ipv4));
 
-            // match ipv4.protocol {
-            //     6 => {
-            //         let (tcp, rest) = parse_tcp(rest)?;
-            //         packet.transport = Some(TransportHeader::TCP(tcp));
-            //         packet.payload = rest.to_vec();
-            //     }
-            //     17 => { ... }
-            // }
+            rest = payload;
 
-            packet.payload = rest.to_vec();
+            match protocol {
+                // TCP
+                6 => {
+                    let (tcp, payload) = parse_tcp(rest)?;
+
+                    packet.transport = Some(TransportLayer::Tcp(tcp));
+
+                    packet.payload = payload.to_vec();
+                }
+
+                // UDP
+                17 => {
+                    // let (udp, payload) = parse_udp(rest)?;
+
+                    // packet.transport = Some(TransportLayer::Udp(udp));
+
+                    // packet.payload = payload.to_vec();
+                }
+
+                // ICMP
+                1 => {
+                    // let (icmp, payload) = parse_icmp(rest)?;
+
+                    // packet.transport = Some(TransportLayer::Icmp(icmp));
+
+                    // packet.payload = payload.to_vec();
+                }
+
+                _ => {
+                    packet.payload = rest.to_vec();
+                }
+            }
         }
 
+        // IPv6
         0x86DD => {
-            let (ipv6, rest) = parse_ipv6(rest)?;
+            let (ipv6, payload) = parse_ipv6(rest)?;
+
+            let next_header = ipv6.next_header;
+
             packet.network = Some(NetworkLayer::IPv6(ipv6));
-            packet.payload = rest.to_vec();
+
+            rest = payload;
+
+            match next_header {
+                // TCP
+                6 => {
+                    let (tcp, payload) = parse_tcp(rest)?;
+
+                    packet.transport = Some(TransportLayer::Tcp(tcp));
+
+                    packet.payload = payload.to_vec();
+                }
+
+                // UDP
+                17 => {
+                    // let (udp, payload) = parse_udp(rest)?;
+
+                    // packet.transport = Some(TransportLayer::Udp(udp));
+
+                    // packet.payload = payload.to_vec();
+                }
+
+                // ICMPv6
+                58 => {
+                    // let (icmp, payload) = parse_icmpv6(rest)?;
+
+                    // packet.transport = Some(TransportLayer::Icmpv6(icmp));
+
+                    // packet.payload = payload.to_vec();
+                }
+
+                _ => {
+                    packet.payload = rest.to_vec();
+                }
+            }
         }
 
+        // ARP
         0x0806 => {
-            // let (arp, rest) = parse_arp(rest)?;
-            // packet.network = Some(NetworkLayer::Arp(arp));
-            // packet.payload = rest.to_vec();
+            let (arp, payload) = parse_arp(rest)?;
+
+            packet.network = Some(NetworkLayer::Arp(arp));
+
+            packet.payload = payload.to_vec();
         }
 
         _ => {
@@ -523,6 +619,223 @@ pub fn parse_ipv6(raw: &[u8]) -> Result<(IPv6Header, &[u8]), ParseError> {
     };
 
     Ok((header, &raw[40..]))
+}
+
+fn parse_tcp(raw: &[u8]) -> Result<(TcpHeader, &[u8]), ParseError> {
+    if raw.len() < 20 {
+        return Err(ParseError::MalformedPacket);
+    }
+
+    let src_port = u16::from_be_bytes([raw[0], raw[1]]);
+
+    let dst_port = u16::from_be_bytes([raw[2], raw[3]]);
+
+    let seq = u32::from_be_bytes([raw[4], raw[5], raw[6], raw[7]]);
+
+    let ack = u32::from_be_bytes([raw[8], raw[9], raw[10], raw[11]]);
+
+    let data_offset = raw[12] >> 4;
+
+    let flags_byte = raw[13];
+
+    let flags = TcpFlags {
+        fin: flags_byte & 0x01 != 0,
+        syn: flags_byte & 0x02 != 0,
+        rst: flags_byte & 0x04 != 0,
+        psh: flags_byte & 0x08 != 0,
+        ack: flags_byte & 0x10 != 0,
+        urg: flags_byte & 0x20 != 0,
+        ece: flags_byte & 0x40 != 0,
+        cwr: flags_byte & 0x80 != 0,
+    };
+
+    let window_size = u16::from_be_bytes([raw[14], raw[15]]);
+
+    let checksum = u16::from_be_bytes([raw[16], raw[17]]);
+
+    let urgent_pointer = u16::from_be_bytes([raw[18], raw[19]]);
+
+    let header_length = (data_offset * 4) as usize;
+
+    if raw.len() < header_length {
+        return Err(ParseError::MalformedPacket);
+    }
+
+    let options_length = header_length - 20;
+
+    let options = if options_length > 0 {
+        parse_tcp_options(&raw[20..header_length])?
+    } else {
+        Vec::new()
+    };
+
+    let payload = &raw[header_length..];
+
+    let header = TcpHeader {
+        src_port,
+        dst_port,
+        seq,
+        ack,
+        data_offset,
+        flags,
+        window_size,
+        checksum,
+        urgent_pointer,
+        options,
+    };
+
+    Ok((header, payload))
+}
+
+pub fn parse_tcp_options(raw: &[u8]) -> Result<Vec<TcpOption>, ParseError> {
+    let mut options = Vec::new();
+
+    let mut offset = 0;
+
+    while offset < raw.len() {
+        let kind = raw[offset];
+
+        match kind {
+            // End of options
+            0 => {
+                options.push(TcpOption::End);
+
+                break;
+            }
+
+            // NOP
+            1 => {
+                options.push(TcpOption::NoOperation);
+
+                offset += 1;
+            }
+
+            _ => {
+                if offset + 1 >= raw.len() {
+                    return Err(ParseError::MalformedPacket);
+                }
+
+                let length = raw[offset + 1] as usize;
+
+                if length < 2 || offset + length > raw.len() {
+                    return Err(ParseError::MalformedPacket);
+                }
+
+                let data = &raw[offset + 2..offset + length];
+
+                match kind {
+                    // MSS
+                    2 => {
+                        if data.len() != 2 {
+                            return Err(ParseError::MalformedPacket);
+                        }
+
+                        let value = u16::from_be_bytes([data[0], data[1]]);
+
+                        options.push(TcpOption::MaximumSegmentSize { value });
+                    }
+
+                    // Window scaling
+                    3 => {
+                        if data.len() != 1 {
+                            return Err(ParseError::MalformedPacket);
+                        }
+
+                        options.push(TcpOption::WindowScale { shift: data[0] });
+                    }
+
+                    // SACK permitted
+                    4 => {
+                        options.push(TcpOption::SackPermitted);
+                    }
+
+                    // Timestamp
+                    8 => {
+                        if data.len() != 8 {
+                            return Err(ParseError::MalformedPacket);
+                        }
+
+                        let ts_value = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+
+                        let ts_echo = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
+
+                        options.push(TcpOption::Timestamp { ts_value, ts_echo });
+                    }
+
+                    _ => {
+                        options.push(TcpOption::Unknown {
+                            kind,
+                            data: data.to_vec(),
+                        });
+                    }
+                }
+
+                offset += length;
+            }
+        }
+    }
+
+    Ok(options)
+}
+
+pub fn parse_arp(raw: &[u8]) -> Result<(ArpHeader, &[u8]), ParseError> {
+    if raw.len() < 8 {
+        return Err(ParseError::MalformedPacket);
+    }
+
+    let hardware_type = u16::from_be_bytes([raw[0], raw[1]]);
+
+    let protocol_type = u16::from_be_bytes([raw[2], raw[3]]);
+
+    let hardware_len = raw[4];
+    let protocol_len = raw[5];
+
+    let operation = u16::from_be_bytes([raw[6], raw[7]]);
+
+    let hlen = hardware_len as usize;
+    let plen = protocol_len as usize;
+
+    let header_size = 8 + hlen + plen + hlen + plen;
+
+    if raw.len() < header_size {
+        return Err(ParseError::MalformedPacket);
+    }
+
+    let mut offset = 8;
+
+    let sender_hardware_addr = raw[offset..offset + hlen].to_vec();
+
+    offset += hlen;
+
+    let sender_protocol_addr = raw[offset..offset + plen].to_vec();
+
+    offset += plen;
+
+    let target_hardware_addr = raw[offset..offset + hlen].to_vec();
+
+    offset += hlen;
+
+    let target_protocol_addr = raw[offset..offset + plen].to_vec();
+
+    offset += plen;
+
+    let header = ArpHeader {
+        hardware_type,
+        protocol_type,
+
+        hardware_len,
+        protocol_len,
+
+        operation,
+
+        sender_hardware_addr,
+        sender_protocol_addr,
+
+        target_hardware_addr,
+        target_protocol_addr,
+    };
+
+    Ok((header, &raw[offset..]))
 }
 
 fn bytes_to_hex(bytes: &[u8], join_char: &str) -> String {
