@@ -407,11 +407,11 @@ pub fn packet_parser(raw: &[u8]) -> Result<Packet, ParseError> {
 
                 // UDP
                 17 => {
-                    // let (udp, payload) = parse_udp(rest)?;
+                    let (udp, payload) = parse_udp(rest)?;
 
-                    // packet.transport = Some(TransportLayer::Udp(udp));
+                    packet.transport = Some(TransportLayer::Udp(udp));
 
-                    // packet.payload = payload.to_vec();
+                    packet.payload = payload.to_vec();
                 }
 
                 // ICMP
@@ -451,11 +451,11 @@ pub fn packet_parser(raw: &[u8]) -> Result<Packet, ParseError> {
 
                 // UDP
                 17 => {
-                    // let (udp, payload) = parse_udp(rest)?;
+                    let (udp, payload) = parse_udp(rest)?;
 
-                    // packet.transport = Some(TransportLayer::Udp(udp));
+                    packet.transport = Some(TransportLayer::Udp(udp));
 
-                    // packet.payload = payload.to_vec();
+                    packet.payload = payload.to_vec();
                 }
 
                 // ICMPv6
@@ -776,6 +776,36 @@ pub fn parse_tcp_options(raw: &[u8]) -> Result<Vec<TcpOption>, ParseError> {
     }
 
     Ok(options)
+}
+
+pub fn parse_udp(raw: &[u8]) -> Result<(UdpHeader, &[u8]), ParseError> {
+    if raw.len() < 8 {
+        return Err(ParseError::MalformedPacket);
+    }
+
+    let src_port = u16::from_be_bytes([raw[0], raw[1]]);
+    let dst_port = u16::from_be_bytes([raw[2], raw[3]]);
+    let length = u16::from_be_bytes([raw[4], raw[5]]);
+    let checksum = u16::from_be_bytes([raw[6], raw[7]]);
+
+    if length < 8 {
+        return Err(ParseError::MalformedPacket);
+    }
+
+    let length = length as usize;
+
+    if raw.len() < length {
+        return Err(ParseError::MalformedPacket);
+    }
+
+    let header = UdpHeader {
+        src_port,
+        dst_port,
+        length: length as u16,
+        checksum,
+    };
+
+    Ok((header, &raw[8..length]))
 }
 
 pub fn parse_arp(raw: &[u8]) -> Result<(ArpHeader, &[u8]), ParseError> {
