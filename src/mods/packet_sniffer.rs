@@ -6,8 +6,12 @@ use ratatui::{
     Frame,
     crossterm::event::KeyCode,
     layout::Rect,
+    prelude::Color,
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{
+        Block, Borders, List, ListItem, ListState, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    },
 };
 use tokio::sync::mpsc::Sender;
 
@@ -234,6 +238,9 @@ pub struct Packet {
 pub struct SnifferModState {
     packets: Vec<Packet>,
     selected_packet: usize,
+    is_running: bool,
+    max_packets: usize,
+    auto_scroll: bool,
 }
 
 pub struct SnifferMod {
@@ -243,18 +250,30 @@ pub struct SnifferMod {
 impl SnifferMod {
     pub fn new() -> Self {
         let mod_state = SnifferModState {
-            packets: Vec::new(),
+            packets: Vec::with_capacity(1000),
             selected_packet: 0,
+            is_running: false,
+            max_packets: 1000,
+            auto_scroll: true,
         };
         Self { state: mod_state }
     }
 
     pub fn start(&mut self, tx: Sender<Event>) {
-        tokio::task::spawn_blocking(move || {
-            background_sniffing(tx);
-        });
+        if (!self.state.is_running) {
+            tokio::task::spawn_blocking(move || {
+                background_sniffing(tx);
+            });
+        } else {
+            // communicate that is running (later)
+        }
+    }
+
+    pub fn stop(&mut self, tx: Sender<Event>) {
+        // stop
     }
 }
+
 impl AppMod for SnifferMod {
     fn update(
         &mut self,
@@ -262,16 +281,45 @@ impl AppMod for SnifferMod {
         tx: tokio::sync::mpsc::Sender<crate::events::Event>,
     ) {
         match event {
+            // MOD EVENTS
             Event::PacketFound(raw) => {
-                let packet_parse = packet_parser(&raw);
-                if let Ok(packet) = packet_parse {
+                if let Ok(packet) = packet_parser(&raw) {
+                    if self.state.packets.len() >= self.state.max_packets {
+                        self.state.packets.remove(0);
+                    }
                     self.state.packets.push(packet);
+
+                    if self.state.auto_scroll && !self.state.packets.is_empty() {
+                        self.state.selected_packet = self.state.packets.len() - 1;
+                    }
                 }
             }
+            // MOD CONTROLS
             Event::Key(k) => match k.code {
                 KeyCode::Char('s') => self.start(tx),
-                // KeyCode::Char('l') => self.state.packets.push()),
+                KeyCode::Char('d') => self.stop(tx),
                 KeyCode::Char('c') => self.state.packets.clear(),
+
+                // PACKET LIST CONTROLS
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if !self.state.packets.is_empty() {
+                        if self.state.selected_packet < self.state.packets.len() - 1 {
+                            self.state.selected_packet += 1;
+                        }
+                    }
+                }
+
+                KeyCode::Up | KeyCode::Char('k') => {
+                    if self.state.selected_packet > 0 {
+                        self.state.selected_packet -= 1;
+                    }
+                }
+
+                KeyCode::Enter => {
+                    if let Some(packet) = self.state.packets.get(self.state.selected_packet) {
+                        // DO SOMETHING
+                    }
+                }
                 _ => {}
             },
             _ => {}
@@ -279,12 +327,12 @@ impl AppMod for SnifferMod {
     }
 
     fn render(&self, f: &mut Frame, area: Rect, _: &crate::app::App) {
-        let packets: Vec<Line> = self
+        let items: Vec<ListItem> = self
             .state
             .packets
             .iter()
             .enumerate()
-            .flat_map(|(i, p)| {
+            .map(|(i, p)| {
                 let src = bytes_to_hex(&p.ethernet.src_mac, ":");
                 let dst = bytes_to_hex(&p.ethernet.dst_mac, ":");
                 let ether = p.ethernet.ether_type_str();
@@ -298,40 +346,63 @@ impl AppMod for SnifferMod {
 
                 let separator = "─".repeat(60);
 
-                vec![
+                let packet_lines = vec![
                     // HEADER PACKET
                     Line::from(vec![
                         Span::raw(format!("[{}] ", i)),
-                        Span::styled("ETH ", ratatui::style::Style::default().bold()),
+                        Span::styled("ETH ", Style::default().bold()),
                         Span::raw(format!("src={} dst={}", src, dst)),
                     ]),
                     // ETHER TYPE
                     Line::from(vec![
                         Span::raw("    ether: "),
-                        Span::styled(
-                            ether,
-                            ratatui::style::Style::default().fg(ratatui::style::Color::Cyan),
-                        ),
+                        Span::styled(ether, Style::default().fg(Color::Cyan)),
                     ]),
                     // NETWORK
                     Line::from(vec![Span::raw("    net: "), Span::raw(network_info)]),
                     // TRANSPORT
                     Line::from(Span::styled(
                         format!("{:?}", p.transport),
-                        ratatui::style::Style::default().fg(ratatui::style::Color::Blue),
+                        Style::default().fg(Color::Blue),
                     )),
                     // SEPARATOR
                     Line::from(Span::styled(
                         separator,
-                        ratatui::style::Style::default().fg(ratatui::style::Color::DarkGray),
+                        Style::default().fg(Color::DarkGray),
                     )),
-                ]
+                ];
+
+                ListItem::new(packet_lines)
             })
             .collect();
 
-        let paragraph = Paragraph::new(packets).wrap(ratatui::widgets::Wrap { trim: true });
+        let list = List::new(items)
+            .highlight_style(
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol(">> ");
 
-        f.render_widget(paragraph, area);
+        let mut list_state = ListState::default();
+        if !self.state.packets.is_empty() {
+            list_state.select(Some(self.state.selected_packet));
+        }
+
+        f.render_stateful_widget(list, area, &mut list_state);
+
+        if !self.state.packets.is_empty() {
+            let mut scrollbar_state =
+                ScrollbarState::new(self.state.packets.len()).position(self.state.selected_packet);
+
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(Some("▲"))
+                .end_symbol(Some("▼"))
+                .track_symbol(Some("│"))
+                .thumb_symbol("█");
+
+            f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
+        }
     }
 
     fn captures_input(&self) -> bool {
