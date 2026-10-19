@@ -1,5 +1,8 @@
+use core::fmt;
+use ratatui::widgets::Clear as ClearWidget;
 use std::{
     cell::RefCell,
+    collections::VecDeque,
     net::{IpAddr, Ipv4Addr},
     ops::RangeToInclusive,
     str::FromStr,
@@ -24,9 +27,26 @@ use crate::{
 };
 
 #[derive(Debug)]
+pub enum PortState {
+    Open,
+    Closed,
+    Filtered,
+}
+
+impl fmt::Display for PortState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PortState::Open => write!(f, "Open"),
+            PortState::Closed => write!(f, "Closed"),
+            PortState::Filtered => write!(f, "Filtered"),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct Port {
     pub port: u16,
-    pub state: String,
+    pub state: PortState,
     pub service: String,
     pub banner: String,
     pub conn_type: ConnType,
@@ -59,6 +79,7 @@ enum ActiveSetting {
     TargetIP,
     PortRange,
     ScanSpeed,
+    BufferCapacity,
 }
 impl ActiveSetting {
     pub fn to_line(&self, state: &ScanState, is_selected: bool) -> Line<'static> {
@@ -66,6 +87,9 @@ impl ActiveSetting {
             &ActiveSetting::TargetIP => (" Target IP:   ", state.ip_address.to_string()),
             &ActiveSetting::PortRange => (" Port Range:  ", format!("{}-{}", 1, state.range.end,)),
             &ActiveSetting::ScanSpeed => (" Scan Speed:  ", format!("{} workers", state.max_speed)),
+            &ActiveSetting::BufferCapacity => {
+                (" Port Buffer Capacity: ", format!("{}", state.ports.len()))
+            }
         };
         let (label_style, value_style) = if is_selected {
             (
@@ -92,10 +116,11 @@ impl ActiveSetting {
         ])
     }
 
-    pub const ALL_VARIANTS: [ActiveSetting; 3] = [
+    pub const ALL_VARIANTS: [ActiveSetting; 4] = [
         ActiveSetting::TargetIP,
         ActiveSetting::PortRange,
         ActiveSetting::ScanSpeed,
+        ActiveSetting::BufferCapacity,
     ];
 
     // pub fn name(&self) -> &'static str {
@@ -114,16 +139,19 @@ pub struct ScanState {
     pub settings_list_state: RefCell<ListState>,
     pub validation_error: String,
 
+    pub max_speed: u32,
     pub max_speed_buff: String,
+
     pub ip_buff: String,
     pub ip_address: IpAddr,
 
     pub range_buff: String,
     pub range: RangeToInclusive<u16>,
 
-    pub max_speed: u32,
+    pub max_cap_buff: String,
+    pub max_cap: u32,
 
-    pub ports: Vec<Port>,
+    pub ports: VecDeque<Port>,
     pub traffic_history: Vec<u64>,
     pub scan_progress: u32,
     pub current_probe: String,
@@ -144,11 +172,13 @@ impl PortsContent {
         ];
         let state = ScanState {
             max_speed: 200,
+            max_cap: 5,
+            max_cap_buff: String::new(),
             settings_list_state: RefCell::new(ListState::default()),
             range: RangeToInclusive { end: 10000 },
             range_buff: String::new(),
             max_speed_buff: String::new(),
-            ports: Vec::new(),
+            ports: VecDeque::with_capacity(100),
             scan_state: ScanLabelStatus::Waiting,
             settings_popup_state: None,
             validation_error: String::new(),
@@ -213,9 +243,10 @@ impl AppMod for PortsContent {
         let inner_settings_area = outer_settings.inner(info_layout[0]);
 
         let settings_layout = Layout::vertical([
-            Constraint::Percentage(33),
-            Constraint::Percentage(33),
-            Constraint::Percentage(34),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
         ])
         .split(inner_settings_area);
 
@@ -224,13 +255,17 @@ impl AppMod for PortsContent {
         let ports_text = format!("TARGET_PORTS: 1..{}", self.state.range.end);
         let ip_text = format!("TARGET_NETNODE: {}", self.state.ip_address);
         let scan_speed_text = format!("SCAN_SPEED: {}", self.state.max_speed);
+        let capacity_text = format!("MAX PORT CAPACITY: {}", self.state.max_cap);
 
-        let ports = Paragraph::new(ports_text).style(Style::new().fg(Color::Cyan));
-        let ip = Paragraph::new(ip_text).style(Style::new().fg(Color::Cyan));
-        let speed = Paragraph::new(scan_speed_text).fg(Color::Cyan);
-        ports.render(settings_layout[0], buf);
-        ip.render(settings_layout[1], buf);
-        speed.render(settings_layout[2], buf);
+        let ports_p = Paragraph::new(ports_text).style(Style::new().fg(Color::Cyan));
+        let ip_p = Paragraph::new(ip_text).style(Style::new().fg(Color::Cyan));
+        let speed_p = Paragraph::new(scan_speed_text).fg(Color::Cyan);
+        let max_cap_p = Paragraph::new(capacity_text).fg(Color::Cyan);
+
+        ports_p.render(settings_layout[0], buf);
+        ip_p.render(settings_layout[1], buf);
+        speed_p.render(settings_layout[2], buf);
+        max_cap_p.render(settings_layout[3], buf);
 
         //Right Panel: Live Traffic & Sparkline Graph
         let outer_traffic = Block::bordered()
@@ -282,9 +317,9 @@ impl AppMod for PortsContent {
                 .ports
                 .iter()
                 .map(|port| {
-                    let (state_label, state_color, glyph) = match port.state.as_str() {
-                        "Open" => ("  [ONLINE]  ", Color::Magenta, "⚡"),
-                        "Filtered" => (" [Filtered]  ", Color::Yellow, "🔒"),
+                    let (state_label, state_color, glyph) = match port.state {
+                        PortState::Open => ("  [ONLINE]  ", Color::Magenta, "⚡"),
+                        PortState::Filtered => (" [Filtered]  ", Color::Yellow, "🔒"),
                         _ => (" [OFFLINE]  ", Color::DarkGray, "✖"),
                     };
 
@@ -322,7 +357,7 @@ impl AppMod for PortsContent {
                         ),
                     ];
 
-                    if port.state == "Open" {
+                    if matches!(port.state, PortState::Open) {
                         line_spans.push(Span::styled("── ", Style::default().fg(Color::DarkGray)));
                         line_spans.push(Span::styled(
                             format!("srv: [{}] ", port.service),
@@ -388,134 +423,115 @@ impl AppMod for PortsContent {
         }
 
         //------------- Modal Popup
+
         if let Some(selection) = &self.state.settings_popup_state {
+            let area = frame.area();
+
+            let max_height = area.height.saturating_sub(2).max(1);
+            let max_width = area.width.saturating_sub(2).max(1);
+
+            let is_input = selection.is_some();
+
+            let popup_height = if is_input {
+                7.min(max_height)
+            } else {
+                (ActiveSetting::ALL_VARIANTS.len() as u16 + 2).min(max_height)
+            };
+
+            let popup_width = 60.min(max_width);
+
             let popup_area = Layout::vertical([
-                Constraint::Percentage(35),
-                Constraint::Length(5),
-                Constraint::Percentage(35),
+                Constraint::Fill(1),
+                Constraint::Length(popup_height),
+                Constraint::Fill(1),
             ])
-            .split(frame.area())[1];
+            .split(area)[1];
 
             let popup_area = Layout::horizontal([
-                Constraint::Percentage(30),
-                Constraint::Percentage(40),
-                Constraint::Percentage(30),
+                Constraint::Fill(1),
+                Constraint::Length(popup_width),
+                Constraint::Fill(1),
             ])
             .split(popup_area)[1];
 
             if let Some(input_variant) = selection {
-                match input_variant {
-                    &ActiveSetting::TargetIP => {
-                        let (label, border_color) = if self.state.validation_error.is_empty() {
-                            (" >> Enter Target IP Address:", Color::Yellow)
-                        } else {
-                            (" [CRITICAL_ERR]: INVALID IP NODE COORD!", Color::Red)
-                        };
-
-                        let popup_text = vec![
-                            Line::from(Span::styled(
-                                label,
-                                Style::default()
-                                    .fg(border_color)
-                                    .add_modifier(Modifier::BOLD),
-                            )),
-                            Line::from(""),
-                            Line::from(format!("  NET_CMD > {}_", self.state.ip_buff)),
-                        ];
-
-                        let popup_widget = Paragraph::new(popup_text).block(
-                            Block::bordered()
-                                .title(" [ IDENTITY_GATEWAY_CONFIG ] ")
-                                .border_type(BorderType::Double)
-                                .border_style(Style::default().fg(border_color)),
-                        );
-
-                        frame.render_widget(ratatui::widgets::Clear, popup_area);
-                        frame.render_widget(popup_widget, popup_area);
+                let (label, input) = match input_variant {
+                    ActiveSetting::TargetIP => {
+                        (">> Enter Target IP Address:", self.state.ip_buff.as_str())
                     }
-                    &ActiveSetting::PortRange => {
-                        let (label, border_color) = if self.state.validation_error.is_empty() {
-                            (" >> Enter new Ports Range", Color::Yellow)
-                        } else {
-                            (
-                                " [CRITICAL_ERR]: Invalid format!\n valid formar: xx..xx",
-                                Color::Red,
-                            )
-                        };
-
-                        let popup_text = vec![
-                            Line::from(Span::styled(
-                                label,
-                                Style::default()
-                                    .fg(border_color)
-                                    .add_modifier(Modifier::BOLD),
-                            )),
-                            Line::from(""),
-                            Line::from(format!("  NET_CMD > {}_", self.state.range_buff)),
-                        ];
-
-                        let popup_widget = Paragraph::new(popup_text).block(
-                            Block::bordered()
-                                .title(" [ IDENTITY_GATEWAY_CONFIG ] ")
-                                .border_type(BorderType::Double)
-                                .border_style(Style::default().fg(border_color)),
-                        );
-
-                        frame.render_widget(ratatui::widgets::Clear, popup_area);
-                        frame.render_widget(popup_widget, popup_area);
+                    ActiveSetting::PortRange => {
+                        (">> Enter new Ports Range:", self.state.range_buff.as_str())
                     }
-                    &ActiveSetting::ScanSpeed => {
-                        let (label, border_color) = if self.state.validation_error.is_empty() {
-                            (" >> Enter new Scan Speed", Color::Yellow)
-                        } else {
-                            (
-                                " [CRITICAL_ERR]: Invalid input.\n only integers are allowed;",
-                                Color::Red,
-                            )
-                        };
+                    ActiveSetting::ScanSpeed => (
+                        ">> Enter new Scan Speed:",
+                        self.state.max_speed_buff.as_str(),
+                    ),
+                    ActiveSetting::BufferCapacity => (
+                        ">> Enter Buffer Capacity:",
+                        self.state.max_cap_buff.as_str(),
+                    ),
+                };
 
-                        let popup_text = vec![
-                            Line::from(Span::styled(
-                                label,
-                                Style::default()
-                                    .fg(border_color)
-                                    .add_modifier(Modifier::BOLD),
-                            )),
-                            Line::from(""),
-                            Line::from(format!("  NET_CMD > {}_", self.state.max_speed_buff)),
-                        ];
+                let border_color = if self.state.validation_error.is_empty() {
+                    Color::Yellow
+                } else {
+                    Color::Red
+                };
 
-                        let popup_widget = Paragraph::new(popup_text).block(
-                            Block::bordered()
-                                .title(" [ IDENTITY_GATEWAY_CONFIG ] ")
-                                .border_type(BorderType::Double)
-                                .border_style(Style::default().fg(border_color)),
-                        );
+                let label = if self.state.validation_error.is_empty() {
+                    label.to_string()
+                } else {
+                    format!("[ERR]: {}", self.state.validation_error)
+                };
 
-                        frame.render_widget(ratatui::widgets::Clear, popup_area);
-                        frame.render_widget(popup_widget, popup_area);
-                    }
-                }
+                let popup_text = vec![
+                    Line::from(Span::styled(
+                        label,
+                        Style::default()
+                            .fg(border_color)
+                            .add_modifier(Modifier::BOLD),
+                    )),
+                    Line::from(""),
+                    Line::from(format!("  NET_CMD > {}_", input)),
+                ];
+
+                let popup_widget = Paragraph::new(popup_text).block(
+                    Block::bordered()
+                        .title(" [ SETTINGS_CONFIG ] ")
+                        .border_type(BorderType::Double)
+                        .border_style(Style::default().fg(border_color)),
+                );
+
+                frame.render_widget(ClearWidget, popup_area);
+                frame.render_widget(popup_widget, popup_area);
             } else {
+                let selected = self
+                    .state
+                    .settings_list_state
+                    .borrow()
+                    .selected()
+                    .unwrap_or(0);
+
                 let list_items: Vec<ListItem> = ActiveSetting::ALL_VARIANTS
                     .iter()
                     .enumerate()
-                    .map(|(i, v)| {
-                        let list_state = self.state.settings_list_state.borrow_mut();
-                        let selected = list_state.selected().unwrap_or(2);
-                        if i == selected {
-                            let line = v.to_line(&self.state, true);
-                            ListItem::new(line)
-                        } else {
-                            let line = v.to_line(&self.state, false);
-                            ListItem::new(line)
-                        }
-                    })
+                    .map(|(i, setting)| ListItem::new(setting.to_line(&self.state, i == selected)))
                     .collect();
-                let settings_list = ratatui::widgets::List::new(list_items)
-                    .block(ratatui::widgets::Block::bordered().title(" Settings "));
 
-                frame.render_widget(settings_list, popup_area);
+                let settings_list = List::new(list_items)
+                    .block(Block::bordered().title(format!(
+                        " Settings ({}/{}) ",
+                        selected + 1,
+                        ActiveSetting::ALL_VARIANTS.len()
+                    )))
+                    .highlight_style(Style::default().add_modifier(Modifier::BOLD));
+
+                frame.render_widget(ClearWidget, popup_area);
+                frame.render_stateful_widget(
+                    settings_list,
+                    popup_area,
+                    &mut self.state.settings_list_state.borrow_mut(),
+                );
             }
         }
     }
@@ -546,9 +562,21 @@ impl AppMod for PortsContent {
                 self.state.current_probe = String::from("SCAN COMPLETE.");
             }
             Event::PortFound(p) => {
-                self.state.ports.push(p);
-                let mut state = self.state.list_state.borrow_mut();
-                state.select(Some(self.state.ports.len() - 1));
+                self.state.ports.push_front(p);
+
+                if self.state.ports.len() as u32 > self.state.max_cap {
+                    if let Some(index) = self
+                        .state
+                        .ports
+                        .iter()
+                        .position(|port| matches!(port.state, PortState::Closed))
+                    {
+                        self.state.ports.remove(index);
+                    }
+
+                    let mut state = self.state.list_state.borrow_mut();
+                    state.select(Some(self.state.ports.len() - 1));
+                }
             }
             Event::Key(k) => {
                 if let Some(state) = &self.state.settings_popup_state {
@@ -588,11 +616,30 @@ impl AppMod for PortsContent {
                                         );
                                     }
                                 }
+                                _ => {}
+                            },
+                            ActiveSetting::BufferCapacity => match k.code {
+                                KeyCode::Char(c) => {
+                                    self.state.max_cap_buff.push(c);
+                                }
+
+                                KeyCode::Backspace => {
+                                    self.state.max_cap_buff.pop();
+                                }
                                 KeyCode::Esc => {
                                     self.state.settings_popup_state = None;
                                 }
+
+                                KeyCode::Enter => {
+                                    if let Ok(new_cap) = self.state.max_cap_buff.parse::<u32>() {
+                                        self.state.max_cap = new_cap;
+                                        self.state.settings_popup_state = None;
+                                    }
+                                }
+
                                 _ => {}
                             },
+
                             ActiveSetting::ScanSpeed => match k.code {
                                 KeyCode::Char(c) => self.state.max_speed_buff.push(c),
                                 KeyCode::Enter => {
@@ -689,7 +736,16 @@ impl AppMod for PortsContent {
                         KeyCode::F(5) => {
                             self.start_scan(tx);
                         }
-                        KeyCode::F(9) => self.state.settings_popup_state = Some(None),
+
+                        KeyCode::F(6) => {
+                            if self.state.scan_state == ScanLabelStatus::Scanning {
+                                self.state.current_probe = String::from("STOPPING SCAN...");
+                                let _ = tx.try_send(Event::StopScanning);
+                            }
+                        }
+                        KeyCode::F(9) => {
+                            self.state.settings_popup_state = Some(None);
+                        }
                         _ => {}
                     }
                 }

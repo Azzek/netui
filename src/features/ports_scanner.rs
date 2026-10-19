@@ -8,7 +8,7 @@ use tokio::task::JoinSet;
 use tokio::time::timeout;
 
 use crate::events::Event;
-use crate::mods::scan_ports::{ConnType, Port};
+use crate::mods::scan_ports::{ConnType, Port, PortState};
 
 fn lookup_service(port: u16) -> &'static str {
     match port {
@@ -91,7 +91,7 @@ async fn scan_tcp(ip: IpAddr, port: u16) -> (u16, Result<Port, Port>) {
             port,
             Err(Port {
                 port,
-                state: "Filtered".to_string(),
+                state: PortState::Filtered,
                 service: lookup_service(port).to_string(),
                 banner: "No response (Firewall)".to_string(),
                 conn_type: ConnType::Tcp,
@@ -102,7 +102,7 @@ async fn scan_tcp(ip: IpAddr, port: u16) -> (u16, Result<Port, Port>) {
             port,
             Ok(Port {
                 port,
-                state: "Closed".to_string(),
+                state: PortState::Closed,
                 service: lookup_service(port).to_string(),
                 banner: "-".to_string(),
                 conn_type: ConnType::Tcp,
@@ -113,7 +113,7 @@ async fn scan_tcp(ip: IpAddr, port: u16) -> (u16, Result<Port, Port>) {
             port,
             Ok(Port {
                 port,
-                state: "Closed".to_string(),
+                state: PortState::Closed,
                 service: lookup_service(port).to_string(),
                 banner: "-".to_string(),
                 conn_type: ConnType::Tcp,
@@ -147,7 +147,7 @@ async fn scan_tcp(ip: IpAddr, port: u16) -> (u16, Result<Port, Port>) {
                 port,
                 Ok(Port {
                     port,
-                    state: "Open".to_string(),
+                    state: PortState::Open,
                     service: service_name,
                     banner,
                     conn_type: ConnType::Tcp,
