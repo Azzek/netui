@@ -1,10 +1,14 @@
 use ratatui::{
+    crossterm::event::KeyEvent,
     style::Style,
     widgets::{Block, Paragraph},
 };
-use tokio::sync::mpsc::Sender;
 
-use crate::{app::App, events::Event, traits::AppMod};
+use crate::{
+    app::App,
+    events::{Event, EventSender},
+    traits::AppMod,
+};
 
 pub struct MainContent {
     pub content: String,
@@ -18,7 +22,7 @@ impl AppMod for MainContent {
         f.render_widget(paragraph, area);
     }
 
-    fn update(&mut self, event: Event, _: Sender<Event>) {
+    fn update(&mut self, event: &Event, _: &EventSender) {
         match event {
             Event::Key(k) => {
                 if let Some(c) = k.code.as_char() {
@@ -28,7 +32,7 @@ impl AppMod for MainContent {
             _ => {}
         }
     }
-
+    fn on_key(&mut self, key: &KeyEvent, _sender: &EventSender) {}
     fn instructions(&self) -> Vec<String> {
         Vec::from(["noting".to_string()])
     }

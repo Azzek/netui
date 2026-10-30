@@ -1,5 +1,7 @@
 use std::net::IpAddr;
 use std::ops::RangeToInclusive;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -7,8 +9,8 @@ use tokio::sync::mpsc::Sender;
 use tokio::task::JoinSet;
 use tokio::time::timeout;
 
-use crate::events::Event;
-use crate::mods::scan_ports::{ConnType, Port, PortState};
+use crate::events::{Event, EventSender};
+use crate::mods::scan_ports::{ConnType, Port, PortState, ScanEvent};
 
 fn lookup_service(port: u16) -> &'static str {
     match port {
@@ -26,10 +28,12 @@ fn lookup_service(port: u16) -> &'static str {
 
 pub fn launch_background_scan(
     target_ip: IpAddr,
-    tx: Sender<Event>,
+    sender: &EventSender,
     range: RangeToInclusive<u16>,
     max_workers: u16,
+    stop: Arc<AtomicBool>,
 ) {
+    let sender = sender.clone();
     tokio::spawn(async move {
         let mut set = JoinSet::new();
 
@@ -62,13 +66,13 @@ pub fn launch_background_scan(
 
             if let Ok((port_num, scan_result)) = result {
                 if let Ok(port_data) = scan_result {
-                    let _ = tx.send(Event::PortFound(port_data)).await;
+                    let _ = sender.send(ScanEvent::PortFound(port_data)).await;
                 };
 
                 let progress = ((processed_ports as u64 * 100) / total_ports as u64) as u32;
                 let current_probe = format!("TCP/SYN -> {}:{}", target_ip, port_num);
-                let _ = tx
-                    .send(Event::ScanProgress {
+                let _ = sender
+                    .send(ScanEvent::Progress {
                         progress,
                         current_probe,
                         pkts_s: current_pkts_s,
@@ -77,7 +81,7 @@ pub fn launch_background_scan(
             }
         }
 
-        let _ = tx.send(Event::ScanFinished).await;
+        let _ = sender.send(ScanEvent::Finished).await;
     });
 }
 

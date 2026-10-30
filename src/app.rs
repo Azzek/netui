@@ -1,11 +1,9 @@
-use ratatui::crossterm::event::KeyCode;
-use tokio::sync::mpsc::Sender;
-
-use crate::{events::Event, traits::AppMod};
+use crate::events::{Event, EventSender};
+use crate::traits::AppMod;
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub struct App {
     pub exit: bool,
-    pub content: String,
     pub pages: Vec<Box<dyn AppMod>>,
     pub current_page: usize,
     pub popup: Option<String>,
@@ -15,48 +13,52 @@ impl App {
     pub fn new(pages: Vec<Box<dyn AppMod>>) -> Self {
         Self {
             exit: false,
-            content: String::new(),
             pages,
             current_page: 0,
             popup: None,
         }
     }
 
-    pub fn handle_events(&mut self, event: Event, tx: Sender<Event>) {
-        let mut forward_key_to_page = true;
+    pub fn handle_events(&mut self, event: &Event, sender: &EventSender) {
+        match event {
+            Event::Key(key) => self.handle_key(key, sender),
+            Event::Popup(text) => self.popup = Some(text.clone()),
+            _ => {
+                for page in self.pages.iter_mut() {
+                    page.update(event, sender);
+                }
+            }
+        }
+    }
+
+    fn handle_key(&mut self, key: &KeyEvent, sender: &EventSender) {
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.exit = true;
+            return;
+        }
+
+        if self.popup.is_some() {
+            if key.code == KeyCode::Esc {
+                self.popup = None;
+            }
+            return;
+        }
+
         if !self.current_page().captures_input() {
-            match &event {
-                Event::Key(k) => {
-                    if self.popup.is_some() {
-                        forward_key_to_page = false;
-                        if k.code == KeyCode::Esc {
-                            self.popup = None;
-                        }
-                    } else {
-                        match k.code {
-                            KeyCode::Char('1') => self.navigate(0),
-                            KeyCode::Char('2') => self.navigate(1),
-                            KeyCode::Char('3') => self.navigate(2),
-                            KeyCode::Char('q') => self.exit = true,
-                            KeyCode::Backspace => {
-                                self.content.pop();
-                            }
-                            KeyCode::Char(c) => self.content.push(c),
-                            _ => {}
-                        }
-                    }
+            match key.code {
+                KeyCode::Char('q') => {
+                    self.exit = true;
+                    return;
                 }
-                Event::Popup(txt) => {
-                    self.popup = Some(txt.clone());
+                KeyCode::Char(c @ '1'..='9') => {
+                    self.navigate((c as u8 - b'1') as usize);
+                    return;
                 }
-                Event::Tick => {}
                 _ => {}
             }
         }
 
-        if forward_key_to_page || !matches!(event, Event::Key(_)) {
-            self.current_page_mut().update(event, tx);
-        }
+        self.current_page_mut().on_key(key, sender);
     }
 
     pub fn current_page(&self) -> &dyn AppMod {

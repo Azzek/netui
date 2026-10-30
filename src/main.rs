@@ -1,9 +1,13 @@
-use std::io::stderr;
+use std::io::{Stderr, stderr};
 
 use anyhow::Result;
-use ratatui::crossterm::{ExecutableCommand, terminal};
+use ratatui::{
+    Terminal,
+    backend::CrosstermBackend,
+    crossterm::{ExecutableCommand, terminal},
+};
 
-use crate::events::EventHandler;
+use crate::{app::App, events::EventHandler};
 
 mod app;
 mod events;
@@ -12,50 +16,58 @@ mod mods;
 mod traits;
 mod ui;
 
+type Term = Terminal<CrosstermBackend<Stderr>>;
+
+fn restore_terminal() {
+    let _ = stderr().execute(terminal::LeaveAlternateScreen);
+    let _ = terminal::disable_raw_mode();
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
-        let _ = stderr().execute(terminal::LeaveAlternateScreen);
-        let _ = terminal::disable_raw_mode();
+        restore_terminal();
         default_hook(panic_info);
     }));
 
     stderr().execute(terminal::EnterAlternateScreen)?;
     terminal::enable_raw_mode()?;
 
-    let backend = ratatui::backend::CrosstermBackend::new(stderr());
-    let mut terminal = ratatui::Terminal::new(backend)?;
-    let mut events_handler = EventHandler::new(250);
+    let mut terminal = Terminal::new(CrosstermBackend::new(stderr()))?;
+    let mut events = EventHandler::new(250);
 
-    let ports_mod = mods::scan_ports::PortsContent::new();
-    let main_mod = mods::main_content::MainContent {
-        content: String::new(),
-    };
-    let sniff_mod = mods::packet_sniffer::SnifferMod::new();
-    let mut app = app::App::new(vec![
-        Box::new(main_mod),
-        Box::new(ports_mod),
-        Box::new(sniff_mod),
+    let mut app = App::new(vec![
+        Box::new(mods::main_content::MainContent {
+            content: String::new(),
+        }),
+        Box::new(mods::scan_ports::PortsContent::new()),
+        Box::new(mods::packet_sniffer::SnifferMod::new()),
     ]);
     app.popup = Some("Welcome to the app!".to_string());
 
-    loop {
-        terminal
-            .draw(|frame| ui::render::render_ui(frame, &app))
-            .expect("cant render ui");
+    let result = run(&mut terminal, &mut app, &mut events).await;
 
-        let event = events_handler.next().await.expect("Unable to read events");
+    restore_terminal();
+    result
+}
 
-        app.handle_events(event, events_handler.sender.clone());
+async fn run(terminal: &mut Term, app: &mut App, events: &mut EventHandler) -> Result<()> {
+    while !app.exit {
+        terminal.draw(|frame| ui::render::render_ui(frame, &*app))?;
 
-        if app.exit {
+        let Some(event) = events.next().await else {
             break;
+        };
+        app.handle_events(&event, &events.sender);
+
+        while !app.exit {
+            let Some(event) = events.try_next() else {
+                break;
+            };
+            app.handle_events(&event, &events.sender);
         }
     }
-
-    stderr().execute(terminal::LeaveAlternateScreen)?;
-    terminal::disable_raw_mode()?;
 
     Ok(())
 }
